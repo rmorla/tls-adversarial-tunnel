@@ -1,4 +1,4 @@
-# TLS Proxy Tunnel
+# TLS Adversarial Proxy Tunnel
 
 A Python TLS tunnel to send IP packets over a secure connection.
 
