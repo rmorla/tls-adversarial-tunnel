@@ -28,9 +28,10 @@ Give ``CAP_NET_ADMIN`` capability to the Python executable, so that it can creat
 sudo setcap cap_net_admin=+pe ~/environments/tls/bin/python
 ```
 
-Install pytun:
+Install pytun and token-bucket:
 ```bash
 pip install git+https://github.com/montag451/pytun
+pip install token-bucket
 ```
 
 Create a *self-signed* server certificate:

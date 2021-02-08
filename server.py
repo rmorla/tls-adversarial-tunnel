@@ -13,6 +13,8 @@ import select
 
 from time import sleep
 
+import token_bucket
+
 # Main thread receives user input, a server thread waits for new
 # connections and serves them, TAP thread reads the interface and
 # sends the packets to every open connection.
@@ -21,7 +23,7 @@ from time import sleep
 # the TCP connection, reading received packets and putting them on 
 # the TAP interface.
 
-def ServerFunction(listen_addr, listen_port, conn_list):
+def ServerFunction(listen_addr, listen_port, conn_list, buckets):
 	bindsocket = socket.socket()
 	bindsocket.bind((listen_addr, listen_port))
 	bindsocket.listen(5)
@@ -30,7 +32,7 @@ def ServerFunction(listen_addr, listen_port, conn_list):
 	# Wait for new connections and serve them, creating a thread for each client
 	while True:
 		newsocket, fromaddr = bindsocket.accept() # blocking call
-		client_thread = threading.Thread(target=ClientThread, args=(newsocket,fromaddr,tap,conn_list,))
+		client_thread = threading.Thread(target=ClientThread, args=(newsocket,fromaddr,tap,conn_list,buckets,))
 		client_thread.daemon = True; client_thread.start()
 
 def ThreadTapFunction(tap,conn_list):
@@ -66,7 +68,7 @@ def ThreadTapFunction(tap,conn_list):
 						conn['kill_signal'] = True
 
 
-def ClientThread(clientsocket, addr, clienttap, conn_list):
+def ClientThread(clientsocket, addr, clienttap, conn_list, buckets):
 	print("New TCP Connection: {}:{}".format(addr[0], addr[1]))
 	try:
 		conn = context.wrap_socket(clientsocket, server_side=True)
@@ -89,21 +91,29 @@ def ClientThread(clientsocket, addr, clienttap, conn_list):
 
 	conn_list.append(new_conn)
 	conn.setblocking(0)
+
+	# Only issue rate limit warning once, to avoid spamming terminal.
+	# Perhaps implement 'verbose' option where warnings are not supressed.
+	first_token_warning = True
+
 	while new_conn['kill_signal'] == False:
 		try:
-			# timestamp and add tokens to bucket
 			ready = select.select([conn], [], [], 0.1)
 			if ready[0]:
 				data = conn.recv(clienttap.mtu)
 				# data = conn.recv(clienttap.mtu)
 				if data:
-					# Remove padding or fake packets. First bytes 2 dictate real size.
+					if buckets.consume(new_conn['CN']):
+						# Remove padding or fake packets. First bytes 2 dictate real size.
 
-					# Also, apply a firewall here! (decide if a packet coming
-					# from the TLS tunnel should go to the network interface)
-					clienttap.write(data)
-				else:
-					sleep(0.05)
+						# Also, apply a firewall here! (decide if a packet coming
+						# from the TLS tunnel should go to the network interface)
+						clienttap.write(data)
+					else:
+						if first_token_warning:
+							first_token_warning = False
+							print("Rate limit exceeded for {}:{} (CN='{}')".format(
+								new_conn['ip'], new_conn['port'], new_conn['CN'] ))
 		except OSError as exc:
 			if exc.errno == errno.ENOTCONN:
 				print("Connection to {} closed by remote host.".format(addr[0]))
@@ -143,6 +153,11 @@ context.load_verify_locations(capath=client_certs_path)
 # }
 active_connections = []
 
+rate_per_key = 10 # frames per second
+max_capacity = 20 # token capacity - defines burst size
+
+buckets = token_bucket.Limiter(rate_per_key, max_capacity, token_bucket.MemoryStorage())
+
 # Initialize a TAP interface and make it non-blocking
 tap = TunTapDevice(flags = IFF_TAP|IFF_NO_PI, name='tap0'); tap.up()
 fcntl.fcntl(tap.fileno(), fcntl.F_SETFL, os.O_NONBLOCK)
@@ -150,11 +165,11 @@ fcntl.fcntl(tap.fileno(), fcntl.F_SETFL, os.O_NONBLOCK)
 tap_thread = threading.Thread(target=ThreadTapFunction, args=(tap, active_connections,))
 tap_thread.daemon = True; tap_thread.start()
 
-t = threading.Thread(target=ServerFunction, args=(listen_addr, listen_port, active_connections,))
+t = threading.Thread(target=ServerFunction, args=(listen_addr, listen_port, active_connections, buckets,))
 t.daemon = True; t.start()
 
 print("Starting server...")
-print("Available commands: close, block, list, exit")
+print("Available commands: close, block, list, update, exit")
 while True:
 	try:
 		inp = input('>> ')
