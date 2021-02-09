@@ -18,10 +18,8 @@ RUN apt update && apt install -y bridge-utils iproute2 uml-utilities
 RUN apt update && apt install -y tcpdump iputils-ping
 RUN apt install -y vim
 
-COPY gen-client-key.sh /root/environments/tls/gen-client-key.sh
-COPY gen-server-key.sh /root/environments/tls/gen-server-key.sh
-RUN chmod a+x /root/environments/tls/gen-client-key.sh
-RUN chmod a+x /root/environments/tls/gen-server-key.sh
+COPY genkeys.sh /root/environments/tls/genkeys.sh
+RUN chmod a+x /root/environments/tls/genkeys.sh
 
 COPY tunnel.py /root/environments/tls/tunnel.py
 #folder for client public keys in the server 
