@@ -12,4 +12,4 @@ A Python TLS tunnel to send IP packets over a secure connection.
 
 ## Windows client
 
-- see Windows folder
+- see windows folder
