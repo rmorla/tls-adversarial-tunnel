@@ -1,0 +1,14 @@
+
+version: "3"
+services:
+    server_proxy:
+      image: ${TUNNEL_IMG} 
+      command: ["/root/environments/tls/gen-server-key.sh"]
+      volumes:
+        - ${ROOT_FOLDER}/certs-server:/root/environments/tls/certs
+    client_proxy:
+      image: ${TUNNEL_IMG} 
+      command: ["/root/environments/tls/gen-client-key.sh"]
+      volumes:
+        - ${ROOT_FOLDER}/certs-client:/root/environments/tls/certs
+    
