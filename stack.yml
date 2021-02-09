@@ -18,12 +18,12 @@ services:
     
     client_app:
       image: ${APP_IMG} 
-      command: ["/bin/ping", "10.0.0.3"]
+      command: ["/usr/bin/ping", "10.0.0.3"]
       cap_add:
         - CAP_NET_ADMIN
     server_app:
       image: ${APP_IMG} 
-      command: ["/bin/ping", "10.0.0.4"]
+      command: ["/usr/bin/ping", "10.0.0.4"]
       cap_add:
         - CAP_NET_ADMIN
 
