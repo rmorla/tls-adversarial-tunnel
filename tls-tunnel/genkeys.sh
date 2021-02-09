@@ -30,9 +30,9 @@ req_extensions = req_ext
 [ dn ]
 C = CH
 O = org
-CN = server1
+CN = tunnel-server
 [ req_ext ]
-subjectAltName = DNS:server1" >> server1.cfg
+subjectAltName = DNS:tunnel-server" >> server1.cfg
 
 openssl req -new -config server1.cfg -newkey rsa:2048 -days 365 -nodes -x509 -keyout server.key -out server.crt
 cp server.crt /root/environments/tls/certs/certs-client
