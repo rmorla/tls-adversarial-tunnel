@@ -51,7 +51,7 @@ class TLSTunnel():
 		parser = argparse.ArgumentParser(description='TLS tunnel client')
 		parser.add_argument('--mode', dest='mode', type=str, default="server")
 		parser.add_argument('--priv_net_addr', dest='priv_net_addr', type=str, default='')
-		parser.add_argument('--tap_mtu', dest='tap_mtu', type=int, default=1530)
+		parser.add_argument('--tap_mtu', dest='tap_mtu', type=int, default=1500)
 		# server
 		parser.add_argument('--listen_addr', dest='listen_addr', default = '0.0.0.0')
 		parser.add_argument('--listen_port', dest='listen_port', type=int, default= 8082)
