@@ -9,6 +9,9 @@ from mininet.node import DockerRunning
 import argparse
 
 parser = argparse.ArgumentParser(description='TLS tunnel network topology')
+
+parser.add_argument('--mtu', dest='mtu', type=int, default=1500)
+
 parser.add_argument('--prx_srv_container', dest='prx_srv_container', type=str, default='')
 parser.add_argument('--prx_srv_priv_addr', dest='prx_srv_priv_addr', type=str, default='')
 parser.add_argument('--prx_cli_container', dest='prx_cli_container', type=str, default='')
@@ -43,7 +46,20 @@ def if_up(d):
     if1 = d.intfNames()[0]
     d.cmd('ip link set ' + if1 + ' up')
 
+def if_mtu(d, mtu):
+    if1 = d.intfNames()[0]
+    d.cmd('ip link set ' + if1 + ' mtu ' + str(mtu))
+
+def if_offloading_off(d):
+    if1 = d.intfNames()[0]
+    d.cmd('ethtool -K ' + if1 + ' gso off')
+    d.cmd('ethtool -K ' + if1 + ' tso off')
+
 for d in [d1, d2, d3, d4]:
     if_up(d)
+    if_mtu(d, mtu)
+
+for d in [d3,d4]:
+    if_offloading_off(d)
 
 CLI(net)
