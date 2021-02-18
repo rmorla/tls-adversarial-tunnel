@@ -16,6 +16,9 @@ from time import sleep
 
 import argparse
 
+
+import token_bucket
+
 # Main thread receives user input, a server thread waits for new
 # connections and serves them, TAP thread reads the interface and
 # sends the packets to every open connection.
@@ -48,15 +51,19 @@ class TLSTunnel():
 		parser = argparse.ArgumentParser(description='TLS tunnel client')
 		parser.add_argument('--mode', dest='mode', type=str, default="server")
 		parser.add_argument('--priv_net_addr', dest='priv_net_addr', type=str, default='')
+		parser.add_argument('--tap_mtu', dest='tap_mtu', type=int, default=1530)
 		# server
 		parser.add_argument('--listen_addr', dest='listen_addr', default = '0.0.0.0')
 		parser.add_argument('--listen_port', dest='listen_port', type=int, default= 8082)
+		parser.add_argument('--tb_rate', dest='tb_rate', type=int, default= 100)
+		parser.add_argument('--tb_burst', dest='tb_burst', type=int, default= 1000)
 		# client
 		parser.add_argument('--server_addr', dest='server_addr', default = 'localhost')
 		parser.add_argument('--server_port', dest='server_port', type=int, default= 8082)
 		parser.add_argument('--server_sni_hostname', dest='server_sni_hostname', default = 'tunnel-server')
 		self.args = parser.parse_args()
 
+		self.tap_mtu = self.args.tap_mtu
 		if self.args.mode == 'client':
 			print("**Client**")
 			self.server_port = self.args.server_port
@@ -74,6 +81,9 @@ class TLSTunnel():
 			self.server_key  = '/root/environments/tls/certs/server.key'
 			self.client_certs_path = '/root/environments/tls/certs/'
 			
+			self.tb_rate = self.args.tb_rate
+			self.tb_burst = self.args.tb_burst
+
 			self.context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
 			self.context.verify_mode = ssl.CERT_REQUIRED
 			self.context.load_cert_chain(certfile=self.server_cert, keyfile=self.server_key)
@@ -143,7 +153,7 @@ class TLSTunnel():
 		# Initialize a TAP interface and make it non-blocking
 		self.tap = TunTapDevice(flags = IFF_TAP|IFF_NO_PI, name=self.tap_interface); self.tap.up()
 		fcntl.fcntl(self.tap.fileno(), fcntl.F_SETFL, os.O_NONBLOCK)
-
+		self.tap.mtu = self.tap_mtu
 
 
 	def srvThreadTapReadFunction(tap,conn_list):
@@ -151,8 +161,15 @@ class TLSTunnel():
 		print("Tap thread started")
 		while True:
 			try:
-				buf = tap.read(tap.mtu)
-				# Insert first 2 bytes indicating actual size.
+				# +20 for ethernet headear
+				packet = tap.read(tap.mtu + 20)
+				# Insert first 3 bytes with 0 and 2 byte big endian int with actual size.
+				l = len(packet)
+				b_packet_length = l.to_bytes(2, byteorder='big')
+				bb1 = bytearray(b'\x00')
+				bb2 = bytearray(b_packet_length)
+				bb3 = bytearray(packet)
+				buf = bytes(bb1+bb2+bb3)
 			except Exception as e:
 				if e.args[0] == errno.EAGAIN or e.args[0] == errno.EWOULDBLOCK:
 					# Not an actual error, just no data to read yet
@@ -180,7 +197,7 @@ class TLSTunnel():
 
 
 	# per client read from ssl and write into tap
-	def srvThreadTapWrite(self, clientsocket, addr, clienttap, conn_list):
+	def srvThreadTapWrite(self, clientsocket, addr, clienttap, conn_list, buckets):
 		print("New TCP Connection: {}:{}".format(addr[0], addr[1]))
 		try:
 			conn = self.context.wrap_socket(clientsocket, server_side=True)
@@ -208,14 +225,19 @@ class TLSTunnel():
 				# timestamp and add tokens to bucket
 				ready = select.select([conn], [], [], 0.1)
 				if ready[0]:
-					data = conn.recv(clienttap.mtu)
+					data = self.get_packet_from_tls(conn)
 					# data = conn.recv(clienttap.mtu)
 					if data:
-						# Remove padding or fake packets. First bytes 2 dictate real size.
+						if buckets.consume(new_conn['CN']):
+							#print("tb OK", new_conn['CN'], buckets._storage.get_token_count(new_conn['CN']))
+							# Remove padding or fake packets. First bytes 2 dictate real size.
+							# Also, apply a firewall here! (decide if a packet coming
+							# from the TLS tunnel should go to the network interface)
+							clienttap.write(data)
+						else:
+							#print("tb XX", new_conn['CN'], buckets._storage.get_token_count(new_conn['CN']))
+							pass
 
-						# Also, apply a firewall here! (decide if a packet coming
-						# from the TLS tunnel should go to the network interface)
-						clienttap.write(data)
 					else:
 						sleep(0.05)
 			except OSError as exc:
@@ -232,7 +254,7 @@ class TLSTunnel():
 			pass
 
 
-	def srvThreadServerFunction(self, listen_addr, listen_port, conn_list):
+	def srvThreadServerFunction(self, listen_addr, listen_port, conn_list, buckets):
 		bindsocket = socket.socket()
 		bindsocket.bind((listen_addr, listen_port))
 		bindsocket.listen(5)
@@ -241,7 +263,7 @@ class TLSTunnel():
 		# Wait for new connections and serve them, creating a thread for each client
 		while True:
 			newsocket, fromaddr = bindsocket.accept() # blocking call
-			client_thread = threading.Thread(target=self.srvThreadTapWrite, args=(newsocket,fromaddr,self.tap,conn_list,))
+			client_thread = threading.Thread(target=self.srvThreadTapWrite, args=(newsocket,fromaddr,self.tap,conn_list,buckets,))
 			client_thread.daemon = True; client_thread.start()
 
 
@@ -323,8 +345,15 @@ class TLSTunnel():
 		print("Tap thread started")
 		while True:
 			try:
-				buf = self.tap.read(self.tap.mtu)
-				# Insert first 2 bytes indicating actual size.
+				# +20 for ethernet headear
+				packet = self.tap.read(self.tap.mtu+20)
+				# Insert first 3 bytes with 0 and 2 byte big endian int with actual size.
+				l = len(packet)
+				b_packet_length = l.to_bytes(2, byteorder='big')
+				bb1 = bytearray(b'\x00')
+				bb2 = bytearray(b_packet_length)
+				bb3 = bytearray(packet)
+				buf = bytes(bb1+bb2+bb3)
 			except Exception as e:
 				if e.args[0] == errno.EAGAIN or e.args[0] == errno.EWOULDBLOCK:
 					# Not an actual error, just no data to read yet
@@ -345,20 +374,32 @@ class TLSTunnel():
 				if exc.errno == errno.EPIPE:
 					print("Broken pipe. Sending kill signal...")
 
-
-
+	# assume connection is blocking
+	def get_packet_from_tls(self, conn):
+		# get first 3 bytes with '\x00' and 2 byte big endian int
+		data = conn.recv(3)
+		if data and len(data) == 3:
+			check = data[0]
+			if check == 0:
+				packet_length = int.from_bytes(data[1:3], "big")
+				packet = conn.recv(packet_length)
+				return packet
+			else:
+				return False
+		return False
+				
 	def cliTapWriteFunction(self, conn):
 		while True:
 			try:
-					data = conn.recv(1504)
-					if data:
-						self.tap.write(data)
-						self.pkts_sent+=1
-						print("\rPackets sent:\t{:7d} | Packets received:\t{:7d}".format(self.pkts_sent, self.pkts_rcvd[0]), end='')
+				data = self.get_packet_from_tls(conn)
+				if data:
+					self.tap.write(data)
+					self.pkts_sent+=1
+					#print("\rPackets sent:\t{:7d} | Packets received:\t{:7d}".format(self.pkts_sent, self.pkts_rcvd[0]), end='')
 			except Exception as e:
-					print("Exception occurred " + str(e))
-					raise
-					break
+				print("Exception occurred " + str(e))
+				raise
+				break
 
 
 	def cli_start_new_client(self):
@@ -389,17 +430,21 @@ if tls.args.mode == 'client':
 				print("Fail to establish connection or connection closed. Waiting a bit before retrying. " + str(e))
 				sleep(5)
 elif tls.args.mode == 'server':
+
+	print ("tb", tls.tb_rate, tls.tb_burst)
+	tls.buckets = token_bucket.Limiter(tls.tb_rate, tls.tb_burst, token_bucket.MemoryStorage())
+
 	# start tap reading and sending to clients via TLS
 	tap_thread = threading.Thread(target=TLSTunnel.srvThreadTapReadFunction, args=(tls.tap, tls.active_connections,))
 	tap_thread.daemon = True; tap_thread.start()
 
 	# start server thread waiting for new clients and spawn new tap read from client and write to tap
-	t = threading.Thread(target=tls.srvThreadServerFunction, args=(tls.args.listen_addr, tls.args.listen_port, tls.active_connections,))
+	t = threading.Thread(target=tls.srvThreadServerFunction, args=(tls.args.listen_addr, tls.args.listen_port, tls.active_connections, tls.buckets,))
 	t.daemon = True; t.start()
 
 	# printout stats and don't exit
 	while True:
-		sleep(5)
+		sleep(30)
 		print("\nActive connections:")
 		for i, connection in enumerate(tls.active_connections):
 			print("{} - {}:{} ({})".format(i, connection['ip'], connection['port'], connection['CN']))
