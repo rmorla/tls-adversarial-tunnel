@@ -3,14 +3,16 @@ version: "3"
 services:
     server_proxy:
       image: ${TUNNEL_IMG} 
-      command: ["/root/environments/tls/bin/python", "-u", "/root/environments/tls/tunnel.py", "--mode", "server", "--priv_net_addr", "10.0.0.1/24"]
+      command: ["/root/environments/tls/bin/python", "-u", "/root/environments/tls/tunnel.py", "--mode", "server", 
+          "--priv_net_addr", "10.0.0.1/24", "--tb_rate", "${TB_RATE}", "--tb_burst", "${TB_BURST}", "--tap_mtu", "1500"]
       volumes:
         - ${ROOT_FOLDER}/certs-server:/root/environments/tls/certs
       cap_add:
         - CAP_NET_ADMIN
     client_proxy:
       image: ${TUNNEL_IMG} 
-      command: ["/root/environments/tls/bin/python", "-u", "/root/environments/tls/tunnel.py", "--mode", "client", "--server_addr", "server_proxy", "--priv_net_addr", "10.0.0.2/24"]
+      command: ["/root/environments/tls/bin/python", "-u", "/root/environments/tls/tunnel.py", "--mode", "client", 
+          "--server_addr", "server_proxy", "--priv_net_addr", "10.0.0.2/24",  "--tap_mtu", "1500"]
       volumes:
         - ${ROOT_FOLDER}/certs-client:/root/environments/tls/certs
       cap_add:
@@ -19,12 +21,12 @@ services:
     
     client_app:
       image: ${APP_IMG} 
-      command: ["/bin/ping", "10.0.0.3"]
+      command: ["/bin/ping", "10.0.0.3", "-s", "1400"]
       cap_add:
         - CAP_NET_ADMIN
     server_app:
       image: ${APP_IMG} 
-      command: ["/bin/ping", "10.0.0.4"]
+      command: ["/bin/ping", "10.0.0.4", "-s", "1400"]
       cap_add:
         - CAP_NET_ADMIN
 
@@ -36,7 +38,8 @@ services:
           "--prx_srv_container",  "tunnel_server_proxy_1", "--prx_srv_priv_addr", "10.0.0.1/24",
           "--prx_cli_container", "tunnel_client_proxy_1", "--prx_cli_priv_addr", "10.0.0.2/24",
           "--srv_container", "tunnel_server_app_1", "--srv_priv_addr", "10.0.0.3/24",
-          "--cli_container", "tunnel_client_app_1", "--cli_priv_addr", "10.0.0.4/24" ]
+          "--cli_container", "tunnel_client_app_1", "--cli_priv_addr", "10.0.0.4/24",
+          "--mtu", "1500"]
       cap_add:
         - CAP_NET_ADMIN
       volumes:
