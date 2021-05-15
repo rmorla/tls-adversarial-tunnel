@@ -13,6 +13,7 @@ RUN /root/environments/tls/bin/pip install git+https://github.com/montag451/pytu
 RUN /root/environments/tls/bin/pip install scapy
 RUN /root/environments/tls/bin/pip install psutil
 RUN /root/environments/tls/bin/pip install ipaddress
+RUN /root/environments/tls/bin/pip install token_bucket
 
 RUN apt update && apt install -y bridge-utils iproute2 uml-utilities
 RUN apt update && apt install -y tcpdump iputils-ping
